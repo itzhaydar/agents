@@ -30,7 +30,7 @@ The **First-run setup** tab guides device checks, model installation, a spoken o
 
 1. Run device checks. If needed, open Windows Settings → Privacy & security (Privacy on Windows 10) → Microphone. Enable microphone access for desktop apps.
 2. Download the official `vosk-model-small-en-us-0.15` English model using the setup button, or download and extract it from <https://alphacephei.com/vosk/models>. Select the extracted model directory containing `am/final.mdl` in **Voice & startup**. The download uses normal HTTPS certificate verification and checks archive paths and size limits; the upstream distribution does not supply a pinned checksum here.
-3. Test offline Windows speech and confirm you can hear the response. Choose volume, speed, and optionally a sounddevice microphone index. A blank index uses the default device.
+3. Test offline Windows speech and confirm you can hear the response. Automatic voice selection prefers an installed female English SAPI voice (for example Microsoft Zira). The voice dropdown lists the SAPI voices available on your PC; choose one and save before testing. New configurations use a slightly slower speaking rate (-1) with the selected voice's native prosody for a more relaxed delivery. Existing speed settings are preserved. Choose volume, speed, and optionally a sounddevice microphone index. A blank index uses the default device.
 4. Register a project as described below.
 5. Save settings to start/restart the listener. Say **“Hey GitPush”**, then check that the window activates, displays your instruction, and speaks **“I'm listening.”**
 6. Test a project instruction and say **“cancel”**. Verify the proposed files and message before performing your first real operation.
@@ -90,6 +90,12 @@ Confirmation expires after 30 seconds of response time, excluding the agent's ow
 Wake listening uses Vosk's restricted vocabulary and exact whole-phrase matching, **not a dedicated wake-word engine**. Command mode uses unrestricted recognition only after activation. Some English models omit “git”; the idle grammar uses the close pronunciation “get” when required. Test false activations in your room. Configure an alternative supported phrase such as **“hey push”** if needed. There are no invented recognition-accuracy claims or calibrated confidence thresholds.
 
 **Wake / Resume listening**, the instruction field, **Confirm push**, and **Cancel** provide an accessible manual fallback. Voice remains the primary workflow.
+
+### Female voice and sound quality
+
+The automatic voice preference applies to existing configurations as well as new installations. If a saved voice has been removed, the app warns and tries an available female voice. If no female SAPI voice is installed, it clearly warns and keeps the Windows default instead of claiming that a female voice is active.
+
+Install an offline female Windows speech voice exposed to **SAPI 5**, restart GitPush to refresh its list, and choose it in **Voice & startup**. Not every Windows Narrator/OneCore or “natural” voice is exposed to SAPI; a voice appearing in Windows settings may not appear in this dropdown. Sound quality depends on the installed engine. This change does not add neural/cloud speech or promise studio-quality audio. Try the voice test and adjust the speaking speed to your preference.
 
 ## What Git execution does
 

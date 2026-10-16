@@ -11,3 +11,10 @@ Development host: Linux, Python 3.12.14, Git 2.52.0. Validation used temporary r
 - Official model download attempted with verified HTTPS; this cloud's egress proxy returned HTTP 403 for `alphacephei.com`. An actual model and acoustic recognition could not be validated here. The application supports manual extracted-model selection and an HTTPS downloader; no verification was bypassed.
 
 Remaining: Windows microphone/acoustic recognition, offline SAPI, default/alternative wake reliability, startup/activation/single-instance native handles, visible Windows terminal, packaged executable and 4 GB hardware performance. See the README acceptance checklist. Application code is implemented, but the complete Windows acceptance workflow has not been certified by these Linux checks.
+
+## Female voice update
+
+- Automatic preference now selects an installed female English SAPI voice; the UI allows an explicit installed-voice selection. New configurations default to rate -1; existing rates remain intact.
+- Voice metadata, preferences, fallback behavior, persisted settings, and the speech worker's selection/plain-text SAPI invocation are tested with mocked Windows COM interfaces. These tests cannot assess audible naturalness.
+- Current headless suite: 67 tests discovered, 66 passed, one optional GUI test skipped because no display is active.
+- Audible quality and the installed voice list still require validation on Windows.

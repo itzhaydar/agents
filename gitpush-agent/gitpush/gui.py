@@ -22,7 +22,8 @@ class Application:
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.log = logging.getLogger('gitpush')
         self.terminal = Terminal()
-        self.speech = SpeechOutput(settings, lambda value: self.emit('error', value))
+        self.speech = SpeechOutput(settings, lambda value: self.emit('error', value),
+                                   lambda voices: self.emit('voices', voices))
         self.listener = VoiceListener(settings, self.speech, self.emit)
         self.controller = Controller(settings, self.emit, self.say, self.mode, self.execute)
         root.title('GitPush Agent')
@@ -222,6 +223,12 @@ class Application:
             self.new_project()
 
     def build_settings(self) -> None:
+        self.voice_names = {'Automatic — prefer female English': ''}
+        self.voice_choice = tk.StringVar(value='Automatic — prefer female English')
+        ttk.Label(self.settings_tab, text='Offline Windows voice (save before testing)').pack(anchor='w')
+        self.voice_picker = ttk.Combobox(self.settings_tab, textvariable=self.voice_choice,
+                                        values=list(self.voice_names), state='readonly')
+        self.voice_picker.pack(fill='x', pady=(2, 6))
         self.model = tk.StringVar(value=self.settings.model_path)
         self.wake = tk.StringVar(value=self.settings.wake_phrase)
         self.device = tk.StringVar(value='' if self.settings.microphone is None else str(self.settings.microphone))
@@ -252,6 +259,7 @@ class Application:
             self.settings.model_path = self.model.get().strip()
             self.settings.wake_phrase = phrase
             self.settings.microphone = microphone
+            self.settings.voice_id = self.voice_names.get(self.voice_choice.get(), self.settings.voice_id)
             self.settings.volume = self.volume.get()
             self.settings.rate = self.rate.get()
             self.settings.save()
@@ -372,6 +380,20 @@ class Application:
                     self.settings.save()
                     self.refresh_projects()
                     self.result.set('Project registered and validated. It will be checked again before every push.')
+            elif kind == 'voices':
+                for voice in value:
+                    label = f'{voice.name} ({"female" if voice.female else "other"}) [{voice.id}]'
+                    self.voice_names[label] = voice.id
+                self.voice_picker.configure(values=list(self.voice_names))
+                if self.settings.voice_id:
+                    label = next((name for name, voice_id in self.voice_names.items() if voice_id == self.settings.voice_id), None)
+                    if label:
+                        self.voice_choice.set(label)
+                    else:
+                        label = 'Saved voice unavailable — automatic fallback'
+                        self.voice_names[label] = self.settings.voice_id
+                        self.voice_picker.configure(values=list(self.voice_names))
+                        self.voice_choice.set(label)
             elif kind == 'diagnostics':
                 self.check_text.set(str(value))
             elif kind == 'model':

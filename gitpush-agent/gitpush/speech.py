@@ -5,6 +5,7 @@ import queue
 import threading
 import time
 from typing import Callable
+from dataclasses import dataclass
 from .config import Settings
 from .parser import wake_matches, normalize
 
@@ -22,9 +23,48 @@ def wake_grammar(model, phrase: str) -> list[str]:
     return [' '.join(grammar_words), '[unk]']
 
 
+@dataclass(frozen=True)
+class VoiceInfo:
+    id: str
+    name: str
+    female: bool
+    english: bool
+
+
+def voice_catalog(engine) -> list[tuple[VoiceInfo, object]]:
+    result = []
+    tokens = engine.GetVoices()
+    for index in range(tokens.Count):
+        token = tokens.Item(index)
+        def attribute(name):
+            try:
+                return str(token.GetAttribute(name))
+            except Exception:
+                return ''
+        english = False
+        for language in attribute('Language').split(';'):
+            try:
+                english = english or (int(language, 16) & 0x3ff) == 9
+            except ValueError:
+                pass
+        result.append((VoiceInfo(str(token.Id), str(token.GetDescription()),
+                                 attribute('Gender').lower() == 'female', english), token))
+    return result
+
+
+def select_voice(voices: list[VoiceInfo], requested: str = '') -> VoiceInfo | None:
+    if requested:
+        selected = next((voice for voice in voices if voice.id == requested), None)
+        if selected:
+            return selected
+    female = [voice for voice in voices if voice.female]
+    return next((voice for voice in female if voice.english), female[0] if female else None)
+
+
 class SpeechOutput:
-    def __init__(self, settings: Settings, error: Callable[[str], None]):
-        self.settings, self.error = settings, error
+    def __init__(self, settings: Settings, error: Callable[[str], None],
+                 catalog: Callable[[list[VoiceInfo]], None] = lambda _: None):
+        self.settings, self.error, self.catalog = settings, error, catalog
         self.busy = threading.Event()
         self.items: queue.Queue[str | None] = queue.Queue()
         self._queue_lock = threading.Lock()
@@ -39,6 +79,9 @@ class SpeechOutput:
     def _run(self) -> None:
         voice = None
         com = None
+        voices = []
+        default_token = None
+        last_selection = None
         try:
             if os.name == 'nt':
                 import pythoncom
@@ -46,6 +89,9 @@ class SpeechOutput:
                 pythoncom.CoInitialize()
                 com = pythoncom
                 voice = win32com.client.Dispatch('SAPI.SpVoice')
+                default_token = voice.Voice
+                voices = voice_catalog(voice)
+                self.catalog([info for info, _ in voices])
             else:
                 self.error('Windows SAPI speech output is unavailable on this operating system.')
         except Exception as exc:
@@ -57,9 +103,20 @@ class SpeechOutput:
                     break
                 try:
                     if voice is not None:
+                        if last_selection != self.settings.voice_id:
+                            infos = [info for info, _ in voices]
+                            selected = select_voice(infos, self.settings.voice_id)
+                            if self.settings.voice_id and not any(info.id == self.settings.voice_id for info in infos):
+                                self.error('The saved voice is no longer installed. Using the automatic female preference when available.')
+                            if selected:
+                                voice.Voice = next(token for info, token in voices if info.id == selected.id)
+                            else:
+                                voice.Voice = default_token
+                                self.error('No female SAPI voice is installed. Using the Windows default. Install an offline female voice exposed to SAPI, then restart GitPush.')
+                            last_selection = self.settings.voice_id
                         voice.Volume = self.settings.volume
                         voice.Rate = self.settings.rate
-                        voice.Speak(text)
+                        voice.Speak(text, 16)  # SVSFIsNotXML: literal text, with native voice prosody.
                 except Exception as exc:
                     self.error(f'Speech output failed: {type(exc).__name__}. Use manual controls and check your voice settings.')
                 finally:

@@ -27,7 +27,8 @@ class Settings:
     model_path: str = ''
     wake_phrase: str = 'hey git push'
     volume: int = 90
-    rate: int = 0
+    rate: int = -1
+    voice_id: str = ''
     microphone: int | None = None
     command_timeout: int = 30
     confirmation_timeout: int = 30
