@@ -26,7 +26,7 @@ py -3.12 -m venv .venv
 
 Python's Windows installer includes Tcl/Tk by default. If Git is missing, install it from <https://git-scm.com/download/win> and restart the application. Node.js is not used.
 
-The **First-run setup** tab guides device checks, model installation, a spoken output test, project registration, and wake testing. Initial setup can use mouse/keyboard. Use **Activity** for normal operation.
+The **First-run setup** tab guides device checks, model installation, a spoken output test, project registration, and wake testing. Each action updates the visible **Setup results** panel; device checks and model downloads show a progress indicator. A status message remains visible above every tab. Voice settings have a scrollbar for smaller screens. Initial setup can use mouse/keyboard. Use **Activity** for normal operation.
 
 1. Run device checks. If needed, open Windows Settings → Privacy & security (Privacy on Windows 10) → Microphone. Enable microphone access for desktop apps.
 2. Download the official `vosk-model-small-en-us-0.15` English model using the setup button, or download and extract it from <https://alphacephei.com/vosk/models>. Select the extracted model directory containing `am/final.mdl` in **Voice & startup**. The download uses normal HTTPS certificate verification and checks archive paths and size limits; the upstream distribution does not supply a pinned checksum here.

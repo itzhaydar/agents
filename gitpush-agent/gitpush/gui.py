@@ -45,6 +45,11 @@ class Application:
         ttk.Label(header, text='GitPush Agent', font=('Segoe UI', 23, 'bold')).pack(side='left')
         ttk.Label(header, textvariable=self.state).pack(side='right')
         ttk.Label(root, textvariable=self.mic, padding=(18, 0)).pack(anchor='w')
+        self.notice_text = tk.StringVar(value=self.result.get())
+        self.result.trace_add('write', lambda *args: self.notice_text.set(self.result.get().split('\n')[0][:200]))
+        self.notice = ttk.Label(root, textvariable=self.notice_text, padding=(18, 6), wraplength=860)
+        self.notice.pack(fill='x')
+        root.bind('<Configure>', lambda event: self.notice.configure(wraplength=max(300, root.winfo_width() - 40)) if event.widget == root else None)
         self.tabs = ttk.Notebook(root)
         self.tabs.pack(fill='both', expand=True, padx=18, pady=12)
         self.dashboard = ttk.Frame(self.tabs, padding=14)
@@ -59,7 +64,7 @@ class Application:
         self.build_settings()
         self.build_setup()
         root.protocol('WM_DELETE_WINDOW', self.close)
-        root.after(100, self.drain)
+        self._drain_after = root.after(100, self.drain)
         if not settings.projects or not settings.model_path:
             self.tabs.select(self.setup_tab)
         elif settings.model_path:
@@ -223,28 +228,37 @@ class Application:
             self.new_project()
 
     def build_settings(self) -> None:
+        canvas = tk.Canvas(self.settings_tab, bg='#101827', highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self.settings_tab, orient='vertical', command=canvas.yview)
+        scrollbar.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        content = ttk.Frame(canvas, padding=(0, 0, 12, 12))
+        window = canvas.create_window((0, 0), window=content, anchor='nw')
+        content.bind('<Configure>', lambda event: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>', lambda event: canvas.itemconfigure(window, width=event.width))
         self.voice_names = {'Automatic — prefer female English': ''}
         self.voice_choice = tk.StringVar(value='Automatic — prefer female English')
-        ttk.Label(self.settings_tab, text='Offline Windows voice (save before testing)').pack(anchor='w')
-        self.voice_picker = ttk.Combobox(self.settings_tab, textvariable=self.voice_choice,
+        ttk.Label(content, text='Offline Windows voice (save before testing)').pack(anchor='w')
+        self.voice_picker = ttk.Combobox(content, textvariable=self.voice_choice,
                                         values=list(self.voice_names), state='readonly')
         self.voice_picker.pack(fill='x', pady=(2, 6))
         self.model = tk.StringVar(value=self.settings.model_path)
         self.wake = tk.StringVar(value=self.settings.wake_phrase)
         self.device = tk.StringVar(value='' if self.settings.microphone is None else str(self.settings.microphone))
         for title, variable in [('Extracted Vosk model directory', self.model), ('Wake phrase (lowercase words)', self.wake), ('Microphone device index (blank = default)', self.device)]:
-            ttk.Label(self.settings_tab, text=title).pack(anchor='w', pady=(10, 2))
-            ttk.Entry(self.settings_tab, textvariable=variable).pack(fill='x')
-        ttk.Button(self.settings_tab, text='Choose model folder', command=lambda: self.choose_folder(self.model)).pack(anchor='w', pady=6)
+            ttk.Label(content, text=title).pack(anchor='w', pady=(10, 2))
+            ttk.Entry(content, textvariable=variable).pack(fill='x')
+        ttk.Button(content, text='Choose model folder', command=lambda: self.choose_folder(self.model)).pack(anchor='w', pady=6)
         self.volume = tk.IntVar(value=self.settings.volume)
         self.rate = tk.IntVar(value=self.settings.rate)
         for title, var, low, high in [('Voice volume', self.volume, 0, 100), ('Voice speed', self.rate, -10, 10)]:
-            ttk.Label(self.settings_tab, text=title).pack(anchor='w', pady=(12, 0))
-            tk.Scale(self.settings_tab, variable=var, from_=low, to=high, orient='horizontal', bg='#101827', fg='white', highlightthickness=0).pack(fill='x')
+            ttk.Label(content, text=title).pack(anchor='w', pady=(12, 0))
+            tk.Scale(content, variable=var, from_=low, to=high, orient='horizontal', bg='#101827', fg='white', highlightthickness=0).pack(fill='x')
         self.startup = tk.BooleanVar(value=startup_enabled())
-        ttk.Checkbutton(self.settings_tab, text='Start GitPush Agent when Windows starts', variable=self.startup).pack(anchor='w', pady=12)
-        ttk.Button(self.settings_tab, text='Save settings & restart listener', command=self.save_settings).pack(anchor='w')
-        ttk.Button(self.settings_tab, text='Test offline Windows voice', command=lambda: self.say("I'm listening. This is the offline Windows voice test.")).pack(anchor='w', pady=8)
+        ttk.Checkbutton(content, text='Start GitPush Agent when Windows starts', variable=self.startup).pack(anchor='w', pady=12)
+        ttk.Button(content, text='Save settings & restart listener', command=self.save_settings).pack(anchor='w')
+        ttk.Button(content, text='Test offline Windows voice', command=lambda: self.say("I'm listening. This is the offline Windows voice test.")).pack(anchor='w', pady=8)
 
     def save_settings(self) -> None:
         if not self.editable():
@@ -277,36 +291,95 @@ class Application:
         self.listener.start()
 
     def build_setup(self) -> None:
-        text = ('Welcome. Complete these steps once; routine use is hands-free.\n\n'
-                '1. Run device checks. Install Git for Windows if missing.\n'
-                '2. Download the small English model, or choose an extracted model in Voice & startup.\n'
-                '3. Test the offline voice. Confirm that you hear it.\n'
-                '4. Register your repositories in Projects. Configure Git identity and upstream outside the agent.\n'
-                '5. Save voice settings, then say the wake phrase. Activity must show LISTENING and “I’m listening.”\n'
-                '6. Speak a project instruction and verify the transcript in Activity. Say cancel for a safe test.\n'
-                '7. Optionally enable sign-in startup in Voice & startup. The minimized window shows microphone status.\n\n'
-                'Microphone permissions: Windows Settings → Privacy (or Privacy & security) → Microphone → '
-                'allow desktop apps. No audio is recorded or sent over the network.\n'
-                'Restricted-grammar wake recognition is not a dedicated wake-word engine; test in your room. '
-                'Choose a different phrase if it activates accidentally.')
-        ttk.Label(self.setup_tab, text=text, wraplength=810, justify='left').pack(anchor='w')
-        ttk.Button(self.setup_tab, text='1. Run device checks', command=self.check_devices).pack(anchor='w', pady=(14, 6))
-        self.download_button = ttk.Button(self.setup_tab, text='2. Download official small English model (~40 MB)', command=self.download)
-        self.download_button.pack(anchor='w', pady=6)
-        ttk.Button(self.setup_tab, text='3. Speak voice test', command=lambda: self.say('GitPush Agent is using your local Windows voice.')).pack(anchor='w', pady=6)
-        ttk.Button(self.setup_tab, text='4. Register projects', command=lambda: self.tabs.select(self.projects_tab)).pack(anchor='w', pady=6)
-        ttk.Button(self.setup_tab, text='5. Save voice settings / test wake phrase', command=lambda: self.tabs.select(self.settings_tab)).pack(anchor='w', pady=6)
+        self.setup_task = None
+        self.setup_tab.columnconfigure(1, weight=1)
+        self.setup_tab.rowconfigure(1, weight=1)
+        ttk.Label(self.setup_tab, text='Complete these steps once. Click a button and watch Setup results on the right.',
+                  wraplength=650).grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 12))
+        buttons = ttk.Frame(self.setup_tab)
+        buttons.grid(row=1, column=0, sticky='nw', padx=(0, 16))
+        self.check_button = ttk.Button(buttons, text='1. Run device checks', command=self.check_devices)
+        self.check_button.pack(fill='x', pady=(0, 8))
+        self.download_button = ttk.Button(buttons, text='2. Download English model (~40 MB)', command=self.download)
+        self.download_button.pack(fill='x', pady=8)
+        ttk.Button(buttons, text='3. Speak voice test', command=self.test_voice).pack(fill='x', pady=8)
+        ttk.Button(buttons, text='4. Register projects', command=self.open_projects).pack(fill='x', pady=8)
+        ttk.Button(buttons, text='5. Open voice settings', command=self.open_voice_settings).pack(fill='x', pady=8)
+        results = ttk.Frame(self.setup_tab)
+        results.grid(row=1, column=1, sticky='nsew')
+        ttk.Label(results, text='Setup results', font=('Segoe UI', 11, 'bold')).pack(anchor='w')
+        self.setup_progress = ttk.Progressbar(results, mode='indeterminate')
+        self.setup_progress.pack(fill='x', pady=8)
+        output_frame = ttk.Frame(results)
+        output_frame.pack(fill='both', expand=True)
+        self.setup_output = tk.Text(output_frame, height=10, width=28, wrap='word', state='disabled',
+                                    bg='#07111e', fg='#bce4d8', padx=10, pady=10)
+        scroll = ttk.Scrollbar(output_frame, command=self.setup_output.yview)
+        scroll.pack(side='right', fill='y')
+        self.setup_output.configure(yscrollcommand=scroll.set)
+        self.setup_output.pack(fill='both', expand=True)
         self.check_text = tk.StringVar()
-        ttk.Label(self.setup_tab, textvariable=self.check_text, wraplength=810).pack(anchor='w', pady=12)
+        self.check_text.trace_add('write', self.show_setup_results)
+        self.check_text.set('Start with step 1. Device-check results and any errors will appear here. No files are changed by device checks.')
+        ttk.Label(self.setup_tab, text='Microphone permission: Windows Settings → Privacy → Microphone → allow desktop apps. '
+                  'Recognition stays offline. After step 5, save settings and say your wake phrase. '
+                  'Restricted-vocabulary recognition is not a dedicated wake-word engine; test it in your room.',
+                  wraplength=650).grid(row=2, column=0, columnspan=2, sticky='w', pady=(12, 0))
+
+    def show_setup_results(self, *args) -> None:
+        self.setup_output.configure(state='normal')
+        self.setup_output.delete('1.0', 'end')
+        self.setup_output.insert('1.0', self.check_text.get())
+        self.setup_output.configure(state='disabled')
+
+    def start_setup_task(self, task: str, message: str) -> bool:
+        if self.setup_task:
+            self.result.set(f'{self.setup_task} is still running. Please wait for its result.')
+            return False
+        self.setup_task = task
+        self.check_text.set(message)
+        self.result.set(message)
+        self.check_button.configure(state='disabled')
+        self.download_button.configure(state='disabled')
+        self.setup_progress.start(15)
+        return True
+
+    def finish_setup_task(self) -> None:
+        self.setup_task = None
+        self.setup_progress.stop()
+        self.check_button.configure(state='normal')
+        self.download_button.configure(state='normal')
 
     def check_devices(self) -> None:
-        threading.Thread(target=lambda: self.emit('diagnostics', '\n'.join(diagnostics(self.settings))), daemon=True).start()
-
-    def download(self) -> None:
-        self.download_button.configure(state='disabled')
+        if not self.start_setup_task('Device check', 'Checking Python, Git, model and microphone…'):
+            return
         def run():
             try:
-                path = download_model(lambda value: self.emit('diagnostics', value))
+                self.emit('diagnostics', '\n'.join(diagnostics(self.settings)))
+            except Exception as exc:
+                self.emit('diagnostics', f'Device checks failed: {exc}')
+        threading.Thread(target=run, daemon=True).start()
+
+    def test_voice(self) -> None:
+        self.check_text.set('Voice test requested. You should hear a spoken sentence. If you hear it, continue to step 4. '
+                            'If not, check speaker volume and Voice & startup. Any speech error will appear here.')
+        self.result.set('Playing the offline voice test. Check your speakers or headphones.')
+        self.say('GitPush Agent is using your local Windows voice.')
+
+    def open_projects(self) -> None:
+        self.result.set('Projects: enter a name, choose the repository root, then click Save / validate.')
+        self.tabs.select(self.projects_tab)
+
+    def open_voice_settings(self) -> None:
+        self.result.set('Voice settings: check the model path and voice, then click Save settings & restart listener. Scroll down if needed.')
+        self.tabs.select(self.settings_tab)
+
+    def download(self) -> None:
+        if not self.start_setup_task('Model download', 'Downloading the English model (~40 MB). Keep the app open; this can take a few minutes…'):
+            return
+        def run():
+            try:
+                path = download_model(lambda value: self.emit('download_progress', value))
                 self.emit('model', str(path))
             except Exception as exc:
                 self.emit('download_error', str(exc))
@@ -345,10 +418,13 @@ class Application:
                 if kind == 'microphone_error':
                     self.append(str(value))
                     self.result.set('Voice unavailable. Complete Setup or use the manual controls.')
+                    self.check_text.set(str(value))
             elif kind in ('output', 'error', 'result'):
                 self.append(str(value))
                 if kind != 'output':
                     self.result.set(str(value))
+                if kind == 'error':
+                    self.check_text.set(str(value))
             elif kind == 'state':
                 self.state.set(str(value))
                 if self.controller.busy:
@@ -395,14 +471,21 @@ class Application:
                         self.voice_picker.configure(values=list(self.voice_names))
                         self.voice_choice.set(label)
             elif kind == 'diagnostics':
+                self.finish_setup_task()
+                self.check_text.set(str(value))
+                self.result.set('Device checks finished. Review Setup results for any missing requirements.')
+            elif kind == 'download_progress':
                 self.check_text.set(str(value))
             elif kind == 'model':
                 self.model.set(str(value))
-                self.check_text.set('Model downloaded. Save voice settings to start the listener.')
-                self.download_button.configure(state='normal')
+                self.finish_setup_task()
+                message = f'Model ready: {value}\nNext: test the voice, register a project, then open Voice & startup and click Save settings & restart listener.'
+                self.check_text.set(message)
+                self.result.set('Model ready. Continue with steps 3–5.')
             elif kind == 'download_error':
-                self.download_button.configure(state='normal')
-                self.check_text.set('Model download failed: ' + str(value))
+                self.finish_setup_task()
+                self.check_text.set('Model download failed: ' + str(value) + '\nCheck internet access, or select an extracted official model in Voice & startup.')
+                self.result.set('Model download failed. See Setup results for the error.')
             elif kind == 'close':
                 self.close()
                 return
@@ -410,7 +493,7 @@ class Application:
         if self.instance.activation_requested():
             self.root.deiconify()
             self.root.lift()
-        self.root.after(100, self.drain)
+        self._drain_after = self.root.after(100, self.drain)
 
     def close(self) -> None:
         if self.controller.busy:
@@ -418,4 +501,5 @@ class Application:
             return
         self.listener.stop()
         self.speech.close()
+        self.root.after_cancel(self._drain_after)
         self.root.destroy()

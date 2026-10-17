@@ -18,3 +18,9 @@ Remaining: Windows microphone/acoustic recognition, offline SAPI, default/altern
 - Voice metadata, preferences, fallback behavior, persisted settings, and the speech worker's selection/plain-text SAPI invocation are tested with mocked Windows COM interfaces. These tests cannot assess audible naturalness.
 - Current headless suite: 67 tests discovered, 66 passed, one optional GUI test skipped because no display is active.
 - Audible quality and the installed voice list still require validation on Windows.
+
+## Setup feedback update
+
+- Replaced the clipped setup footer with a visible, scrollable results panel beside the five action buttons. Added immediate action feedback, busy indicators, download errors and a shared status notice across tabs. Voice settings scroll on short windows.
+- 68 tests passed on the Linux virtual display, including the real-Git GUI test and a setup test at 1280×680 and 740×600. The setup test checks visible buttons/results, asynchronous device-check completion, download failure feedback, speech-error display and project/settings navigation.
+- Windows audio and packaged executable checks remain user-side acceptance work. Rebuilding the executable is required to incorporate source updates.

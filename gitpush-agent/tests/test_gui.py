@@ -61,3 +61,51 @@ class GuiTests(unittest.TestCase):
                     speech.return_value.say.assert_any_call('Changes pushed successfully!')
                 finally:
                     app.close()
+
+    def test_setup_feedback_visible_on_small_windows(self):
+        import tkinter as tk
+        from gitpush.gui import Application
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'GITPUSH_DATA_DIR': folder}), patch('gitpush.gui.SpeechOutput') as speech, patch('gitpush.gui.VoiceListener'), patch('gitpush.gui.diagnostics', return_value=['Python: OK', 'Microphone: missing']), patch('gitpush.gui.download_model', side_effect=RuntimeError('Network unavailable')):
+            speech.return_value.busy.is_set.return_value = False
+            instance = Mock()
+            instance.activation_requested.return_value = False
+            root = tk.Tk()
+            app = Application(root, Settings(), instance)
+            try:
+                def wait_for(predicate):
+                    deadline = time.monotonic() + 5
+                    while not predicate() and time.monotonic() < deadline:
+                        root.update()
+                        threading.Event().wait(.01)
+                    self.assertTrue(predicate())
+                for size in ['1280x680', '740x600']:
+                    root.geometry(size)
+                    root.update()
+                    self.assertGreater(app.setup_output.winfo_height(), 80)
+                    self.assertGreater(app.setup_output.winfo_width(), 100)
+                    page_bottom = app.setup_tab.winfo_rooty() + app.setup_tab.winfo_height()
+                    self.assertLess(app.setup_output.winfo_rooty() + app.setup_output.winfo_height(), page_bottom)
+                    for button in app.check_button.master.winfo_children():
+                        self.assertLessEqual(button.winfo_rooty() + button.winfo_height(), page_bottom)
+                app.check_devices()
+                self.assertIn('Checking', app.check_text.get())
+                self.assertEqual(str(app.check_button['state']), 'disabled')
+                wait_for(lambda: app.setup_task is None)
+                self.assertIn('Microphone: missing', app.setup_output.get('1.0', 'end'))
+                self.assertEqual(str(app.check_button['state']), 'normal')
+                app.download()
+                self.assertIn('Downloading', app.check_text.get())
+                wait_for(lambda: app.setup_task is None)
+                self.assertIn('Network unavailable', app.setup_output.get('1.0', 'end'))
+                app.test_voice()
+                speech.return_value.say.assert_called_with('GitPush Agent is using your local Windows voice.')
+                self.assertIn('Voice test requested', app.check_text.get())
+                app.emit('error', 'Speech unavailable')
+                wait_for(lambda: app.check_text.get() == 'Speech unavailable')
+                app.open_projects()
+                self.assertEqual(app.tabs.select(), str(app.projects_tab))
+                app.open_voice_settings()
+                self.assertEqual(app.tabs.select(), str(app.settings_tab))
+                self.assertIn('Save settings', app.result.get())
+            finally:
+                app.close()
