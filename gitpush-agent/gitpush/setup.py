@@ -6,6 +6,7 @@ import sys
 import tempfile
 import urllib.request
 import zipfile
+import time
 from pathlib import Path
 from .config import data_dir
 
@@ -13,7 +14,7 @@ MODEL_URL = 'https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
 MODEL_NAME = 'vosk-model-small-en-us-0.15'
 
 
-def download_model(progress=lambda _: None) -> Path:
+def download_model(progress=lambda _: None, transfer=lambda received, total: None) -> Path:
     """Official HTTPS distribution, normal certificate verification, bounded extraction."""
     destination = data_dir() / 'models'
     destination.mkdir(exist_ok=True)
@@ -25,12 +26,22 @@ def download_model(progress=lambda _: None) -> Path:
         archive = folder / 'model.zip'
         progress('Downloading the small English model from alphacephei.com…')
         with urllib.request.urlopen(MODEL_URL, context=ssl.create_default_context(), timeout=60) as response, archive.open('wb') as output:
+            size = response.headers.get('Content-Length')
+            expected = int(size) if size and size.isdigit() else None
             total = 0
+            last_update = 0.0
             while chunk := response.read(65536):
                 total += len(chunk)
                 if total > 100 * 1024 * 1024:
                     raise RuntimeError('Model download exceeds the expected size limit.')
                 output.write(chunk)
+                if time.monotonic() - last_update > .1:
+                    transfer(total, expected)
+                    last_update = time.monotonic()
+            transfer(total, expected)
+            if expected is not None and total != expected:
+                raise RuntimeError('Model download was incomplete. Please retry.')
+        progress('Download complete. Checking and extracting the offline voice model…')
         with zipfile.ZipFile(archive) as zipped:
             if sum(info.file_size for info in zipped.infolist()) > 250 * 1024 * 1024:
                 raise RuntimeError('Model archive exceeds the extraction size limit.')
@@ -55,9 +66,18 @@ def diagnostics(settings) -> list[str]:
                'Model: ' + ('found' if (Path(settings.model_path) / 'am' / 'final.mdl').is_file() else 'select or download model')]
     try:
         import sounddevice as sd
+        from .windows import microphone_privacy_status
+        results.append(microphone_privacy_status())
         device = sd.query_devices(settings.microphone, 'input')
         sd.check_input_settings(device=settings.microphone, channels=1, dtype='int16', samplerate=16000)
-        results.append(f'Microphone: {device["name"]}; 16 kHz mono supported')
+        with sd.RawInputStream(device=settings.microphone, channels=1, dtype='int16', samplerate=16000):
+            results.append(f'Microphone: {device["name"]}; capture opened successfully (no audio saved)')
     except Exception as exc:
         results.append(f'Microphone check failed: {exc}. Check Windows microphone permission.')
     return results
+
+
+def existing_model(configured: str = '') -> Path | None:
+    candidates = [Path(configured)] if configured else []
+    candidates.append(data_dir() / 'models' / MODEL_NAME)
+    return next((path for path in candidates if (path / 'am' / 'final.mdl').is_file()), None)

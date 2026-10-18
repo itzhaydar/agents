@@ -4,7 +4,8 @@ import time
 from typing import Callable
 from .config import Settings, Project
 from .git_manager import GitManager, GitError, Plan
-from .parser import parse, commit_message, phrase_in
+from .parser import parse, commit_message, phrase_in, normalize
+from .discovery import merge_projects
 
 
 class Controller:
@@ -13,6 +14,7 @@ class Controller:
                  say: Callable[[str], None], mode: Callable[[str], None],
                  execute: Callable[[Plan], str]):
         self.settings, self.emit, self.say, self.mode, self.execute = settings, emit, say, mode, execute
+        self.discovered_projects: list[Project] = []
         self.state = 'IDLE'
         self.plan: Plan | None = None
         self.project: Project | None = None
@@ -62,7 +64,7 @@ class Controller:
 
     def handle(self, text: str) -> None:
         self.emit('instruction', text)
-        command = parse(text, self.settings.projects)
+        command = parse(text, merge_projects(self.settings.projects, self.discovered_projects))
         if self.busy:
             return
         if command.action == 'cancel':
@@ -108,9 +110,15 @@ class Controller:
             self.prepare(self.project, command.message)
             return
         if self.candidates:
-            matches = [p for p in self.candidates if phrase_in(p.name, text)]
+            words = normalize(text)
+            numbers = {'one': 0, 'first': 0, 'two': 1, 'second': 1, 'three': 2, 'third': 2,
+                       'four': 3, 'fourth': 3, 'five': 4, 'fifth': 4}
+            selection = words.removeprefix('number ').removeprefix('option ')
+            index = int(selection) - 1 if selection.isdigit() else numbers.get(selection)
+            matches = ([self.candidates[index]] if index is not None and 0 <= index < len(self.candidates)
+                       else [p for p in self.candidates if phrase_in(p.name, text)])
             if len(matches) != 1:
-                self.prompt('Choose one project: ' + ', '.join(p.name for p in self.candidates))
+                self.prompt('Say the option number. ' + '. '.join(f'{i + 1}: {p.name}, in {p.path}' for i, p in enumerate(self.candidates)))
                 return
             self.project = matches[0]
             self.candidates = []
@@ -130,7 +138,7 @@ class Controller:
             self.candidates = command.projects
             self.pending_text = text
             self.transition('LISTENING')
-            self.prompt('Choose one project: ' + ', '.join(p.name for p in command.projects))
+            self.prompt('Say the option number. ' + '. '.join(f'{i + 1}: {p.name}, in {p.path}' for i, p in enumerate(command.projects)))
         elif not command.projects:
             self.prompt("I couldn't find that project.")
         else:
@@ -167,7 +175,7 @@ class Controller:
                 return
             self.transition('AWAITING_CONFIRMATION')
             summary = f'{len(value.files)} files selected, {len(value.staged)} previously staged, {len(value.excluded)} excluded. '
-            self.prompt(summary + f'Ready to push changes to {value.project}. Commit message: {value.message or "push existing commits only"}. Say confirm push or cancel.')
+            self.prompt(summary + f'Repository {value.root}, branch {value.branch}. Ready to push changes to {value.project}. Commit message: {value.message or "push existing commits only"}. Say confirm push or cancel.')
         elif kind == 'prepare_failed':
             self.busy = False
             if str(value) == 'Please describe the changes before committing.':

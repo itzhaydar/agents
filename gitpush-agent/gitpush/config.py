@@ -24,6 +24,7 @@ class Project:
 @dataclass
 class Settings:
     projects: list[Project] = field(default_factory=list)
+    search_roots: list[str] = field(default_factory=list)
     model_path: str = ''
     wake_phrase: str = 'hey git push'
     volume: int = 90

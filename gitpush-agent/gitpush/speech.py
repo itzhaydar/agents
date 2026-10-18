@@ -63,8 +63,9 @@ def select_voice(voices: list[VoiceInfo], requested: str = '') -> VoiceInfo | No
 
 class SpeechOutput:
     def __init__(self, settings: Settings, error: Callable[[str], None],
-                 catalog: Callable[[list[VoiceInfo]], None] = lambda _: None):
-        self.settings, self.error, self.catalog = settings, error, catalog
+                 catalog: Callable[[list[VoiceInfo]], None] = lambda _: None,
+                 spoken: Callable[[str], None] = lambda _: None):
+        self.settings, self.error, self.catalog, self.spoken = settings, error, catalog, spoken
         self.busy = threading.Event()
         self.items: queue.Queue[str | None] = queue.Queue()
         self._queue_lock = threading.Lock()
@@ -117,6 +118,9 @@ class SpeechOutput:
                         voice.Volume = self.settings.volume
                         voice.Rate = self.settings.rate
                         voice.Speak(text, 16)  # SVSFIsNotXML: literal text, with native voice prosody.
+                        self.spoken(text)
+                    else:
+                        self.error('Speech output unavailable. Check offline Windows voices and pywin32; use manual controls meanwhile.')
                 except Exception as exc:
                     self.error(f'Speech output failed: {type(exc).__name__}. Use manual controls and check your voice settings.')
                 finally:

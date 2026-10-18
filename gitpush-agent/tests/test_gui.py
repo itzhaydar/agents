@@ -33,7 +33,10 @@ class GuiTests(unittest.TestCase):
             git(root_path, 'remote', 'add', 'origin', str(remote))
             git(root_path, 'push', '-u', 'origin', 'feature')
             file.write_text('fixed')
-            settings = Settings(projects=[Project('sample', str(root_path))])
+            settings = Settings(search_roots=[str(base)])
+            # Discover this unregistered repository by its spoken folder name.
+            root_path.rename(base / 'sample')
+            root_path = base / 'sample'
             instance = Mock()
             instance.activation_requested.return_value = False
             with patch.dict(os.environ, {'GITPUSH_DATA_DIR': str(base / 'data')}), patch('gitpush.gui.SpeechOutput') as speech, patch('gitpush.gui.VoiceListener'), patch('gitpush.gui.Terminal'):
@@ -49,6 +52,8 @@ class GuiTests(unittest.TestCase):
                         self.assertTrue(predicate(), app.result.get())
                     root.update()
                     self.assertEqual(app.tabs.index('end'), 4)
+                    wait_for(lambda: bool(app.controller.discovered_projects))
+                    self.assertFalse(app.settings.projects)
                     app.manual.insert(0, 'Push sample. Fixed layout.')
                     app.submit()
                     wait_for(lambda: app.controller.state == 'AWAITING_CONFIRMATION')
@@ -70,7 +75,7 @@ class GuiTests(unittest.TestCase):
             instance = Mock()
             instance.activation_requested.return_value = False
             root = tk.Tk()
-            app = Application(root, Settings(), instance)
+            app = Application(root, Settings(search_roots=[folder]), instance)
             try:
                 def wait_for(predicate):
                     deadline = time.monotonic() + 5

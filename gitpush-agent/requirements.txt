@@ -1,3 +1,4 @@
 vosk==0.3.45
 sounddevice==0.5.1
-pywin32==308; sys_platform == 'win32'
+pywin32==308; sys_platform == 'win32' and python_version < '3.14'
+pywin32==312; sys_platform == 'win32' and python_version >= '3.14'

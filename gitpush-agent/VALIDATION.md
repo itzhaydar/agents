@@ -24,3 +24,14 @@ Remaining: Windows microphone/acoustic recognition, offline SAPI, default/altern
 - Replaced the clipped setup footer with a visible, scrollable results panel beside the five action buttons. Added immediate action feedback, busy indicators, download errors and a shared status notice across tabs. Voice settings scroll on short windows.
 - 68 tests passed on the Linux virtual display, including the real-Git GUI test and a setup test at 1280×680 and 740×600. The setup test checks visible buttons/results, asynchronous device-check completion, download failure feedback, speech-error display and project/settings navigation.
 - Windows audio and packaged executable checks remain user-side acceptance work. Rebuilding the executable is required to incorporate source updates.
+
+## Automatic folders, observed setup progress and installer recipe
+
+- 83 tests passed with `DISPLAY=:97 GITPUSH_DATA_DIR=/tmp/gitpush-discovery-tests .venv/bin/python -m unittest discover -s tests` on the Linux virtual desktop.
+- The GUI integration test now discovers an unregistered Git folder, accepts an instruction by folder name, previews it, commits, pushes to a local bare remote and checks the remote hash.
+- Added discovery tests for duplicate names, cache/submodule boundaries, linked-worktree markers, search limits, inaccessible paths, symlink avoidance, spoken names and saved-setting precedence. Added spoken-number disambiguation tests.
+- Added model tests for actual byte counts, model reuse, incomplete responses, archive traversal prevention and TLS context use. Mock archive content is test-only, not a production speech model. Added a test verifying that diagnostics open an actual capture-stream interface.
+- Reviewed the revised dark UI on a virtual display; existing setup-layout tests exercise small windows. Download percentages are derived from bytes, playback completion from SAPI, capture status from the microphone worker and scan status from discovered folders.
+- Python 3.14 now selects pywin32 312; older supported Python versions retain 308. Dependency integrity check passed in the Linux Python 3.12 environment.
+- Added `build-windows.ps1` and an Inno Setup per-user installer recipe. No Windows installer or executable was built/tested here. UAC elevation is deliberately unnecessary; Windows microphone privacy remains user-controlled.
+- Acoustic recognition, Windows privacy/device behavior, SAPI audible quality, sign-in activation, installation/uninstallation and low-end hardware performance still require Windows acceptance testing. The previously observed official-model egress restriction remains; HTTPS verification has not been bypassed.

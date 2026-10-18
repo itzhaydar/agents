@@ -83,3 +83,28 @@ def set_startup(enabled: bool) -> None:
                 winreg.DeleteValue(key, 'GitPushAgent')
             except FileNotFoundError:
                 pass
+
+
+def open_microphone_settings() -> None:
+    if os.name != 'nt':
+        raise RuntimeError('Windows microphone settings are available on Windows only.')
+    os.startfile('ms-settings:privacy-microphone')
+
+
+def microphone_privacy_status() -> str:
+    if os.name != 'nt':
+        return 'Microphone privacy: managed by the operating system'
+    import winreg
+    try:
+        base = r'Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone'
+        for suffix in ('', r'\NonPackaged'):
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, base + suffix) as key:
+                    value, _ = winreg.QueryValueEx(key, 'Value')
+                    if str(value).lower() == 'deny':
+                        return 'Windows microphone privacy: blocked. Enable microphone and desktop-app access in Windows Settings.'
+            except FileNotFoundError:
+                pass
+        return 'Windows microphone privacy: capture must be tested; desktop apps do not always show an individual permission prompt.'
+    except OSError:
+        return 'Windows microphone privacy: setting unavailable or managed by policy; test capture and check Windows Settings.'

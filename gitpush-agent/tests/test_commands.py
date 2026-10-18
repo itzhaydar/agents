@@ -241,3 +241,26 @@ class ControllerTests(unittest.TestCase):
         finally:
             speech.close()
             speech.thread.join(timeout=2)
+
+    def test_discovered_project_is_used_without_registration(self):
+        discovered = Project('flight app', '/workspace/flight-app')
+        self.settings.projects = []
+        self.controller.discovered_projects = [discovered]
+        with patch('gitpush.controller.GitManager') as manager:
+            manager.return_value.prepare.return_value = self.plan
+            self.controller.handle('Push flight app. Added flight controls.')
+            self.await_event('prepared')
+            manager.return_value.prepare.assert_called_once_with(discovered, 'Add flight controls')
+
+    def test_duplicate_discovered_names_resolved_by_spoken_number(self):
+        first, second = Project('portfolio', '/client/portfolio'), Project('portfolio', '/personal/portfolio')
+        self.settings.projects = []
+        self.controller.discovered_projects = [first, second]
+        self.controller.handle('Push portfolio. Fixed mobile layout.')
+        self.assertIn('/client/portfolio', self.responses[-1])
+        self.assertFalse(self.executed)
+        with patch('gitpush.controller.GitManager') as manager:
+            manager.return_value.prepare.return_value = self.plan
+            self.controller.handle('option two')
+            self.await_event('prepared')
+            manager.return_value.prepare.assert_called_once_with(second, 'Fix mobile layout')

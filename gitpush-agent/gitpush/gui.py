@@ -10,10 +10,11 @@ from .config import Project, Settings
 from .controller import Controller
 from .git_manager import GitManager, Plan, sanitize
 from .parser import normalize
-from .setup import diagnostics, download_model
+from .setup import diagnostics, download_model, existing_model
+from .discovery import default_roots, discover
 from .speech import SpeechOutput, VoiceListener
 from .terminal import Terminal
-from .windows import SingleInstance, set_startup, startup_enabled
+from .windows import SingleInstance, set_startup, startup_enabled, open_microphone_settings
 
 
 class Application:
@@ -23,7 +24,7 @@ class Application:
         self.log = logging.getLogger('gitpush')
         self.terminal = Terminal()
         self.speech = SpeechOutput(settings, lambda value: self.emit('error', value),
-                                   lambda voices: self.emit('voices', voices))
+                                   lambda voices: self.emit('voices', voices), lambda text: self.emit('spoken', text))
         self.listener = VoiceListener(settings, self.speech, self.emit)
         self.controller = Controller(settings, self.emit, self.say, self.mode, self.execute)
         root.title('GitPush Agent')
@@ -35,14 +36,28 @@ class Application:
         style.configure('.', font=('Segoe UI', 10))
         style.configure('TFrame', background='#101827')
         style.configure('TLabel', background='#101827', foreground='#e2e8f0')
-        style.configure('TButton', padding=(12, 7))
+        style.configure('TNotebook', background='#101827', borderwidth=0)
+        style.configure('TNotebook.Tab', background='#1c2a40', foreground='#aabbd1', padding=(18, 10))
+        style.map('TNotebook.Tab', background=[('selected', '#183f49')], foreground=[('selected', '#73edcf')])
+        style.configure('TButton', padding=(12, 8), background='#22344b', foreground='#e2e8f0', borderwidth=0)
+        style.map('TButton', background=[('active', '#304b68'), ('disabled', '#192538')], foreground=[('disabled', '#708198')])
+        style.configure('Accent.TButton', background='#20a88a', foreground='#071b17')
+        style.map('Accent.TButton', background=[('active', '#54d8b7'), ('disabled', '#23483f')])
+        style.configure('TEntry', fieldbackground='#18273d', foreground='#edf4fc', insertcolor='#edf4fc')
+        style.configure('Treeview', background='#142238', fieldbackground='#142238', foreground='#e2e8f0', rowheight=25)
+        style.configure('Treeview.Heading', background='#22344b', foreground='#aabbd1')
+        style.map('Treeview', background=[('selected', '#225649')])
+        style.configure('TProgressbar', background='#39cfaa', troughcolor='#1c2a40')
         style.configure('TCheckbutton', background='#101827', foreground='#e2e8f0')
         self.state = tk.StringVar(value='IDLE')
         self.mic = tk.StringVar(value='Microphone stopped')
-        self.result = tk.StringVar(value='Register a project and complete Setup to begin.')
+        self.result = tk.StringVar(value='Welcome. Prepare offline voice once; discover your Git folders automatically.')
         header = ttk.Frame(root, padding=18)
         header.pack(fill='x')
-        ttk.Label(header, text='GitPush Agent', font=('Segoe UI', 23, 'bold')).pack(side='left')
+        brand = ttk.Frame(header)
+        brand.pack(side='left')
+        ttk.Label(brand, text='GitPush Agent', font=('Segoe UI', 23, 'bold')).pack(anchor='w')
+        ttk.Label(brand, text='SPEAK. REVIEW. SHIP.', foreground='#64d6b8', font=('Segoe UI', 9)).pack(anchor='w')
         ttk.Label(header, textvariable=self.state).pack(side='right')
         ttk.Label(root, textvariable=self.mic, padding=(18, 0)).pack(anchor='w')
         self.notice_text = tk.StringVar(value=self.result.get())
@@ -56,8 +71,8 @@ class Application:
         self.projects_tab = ttk.Frame(self.tabs, padding=14)
         self.settings_tab = ttk.Frame(self.tabs, padding=14)
         self.setup_tab = ttk.Frame(self.tabs, padding=14)
-        for tab, title in [(self.dashboard, 'Activity'), (self.projects_tab, 'Projects'),
-                           (self.settings_tab, 'Voice & startup'), (self.setup_tab, 'First-run setup')]:
+        for tab, title in [(self.dashboard, 'Activity'), (self.projects_tab, 'Workspaces'),
+                           (self.settings_tab, 'Voice & startup'), (self.setup_tab, 'Get started')]:
             self.tabs.add(tab, text=title)
         self.build_dashboard()
         self.build_projects()
@@ -65,10 +80,12 @@ class Application:
         self.build_setup()
         root.protocol('WM_DELETE_WINDOW', self.close)
         self._drain_after = root.after(100, self.drain)
-        if not settings.projects or not settings.model_path:
+        self.scanning = False
+        if not settings.model_path:
             self.tabs.select(self.setup_tab)
         elif settings.model_path:
             self.listener.start()
+        self._scan_after = root.after(500, self.scan_workspaces)
         if background:
             root.iconify()  # Observable taskbar indicator; microphone never runs invisibly.
 
@@ -145,16 +162,36 @@ class Application:
             self.listener.set_mode('command')
 
     def build_projects(self) -> None:
-        self.project_list = tk.Listbox(self.projects_tab, height=7, exportselection=False)
+        canvas = tk.Canvas(self.projects_tab, bg='#101827', highlightthickness=0)
+        scroll = ttk.Scrollbar(self.projects_tab, command=canvas.yview)
+        scroll.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+        canvas.configure(yscrollcommand=scroll.set)
+        content = ttk.Frame(canvas)
+        window = canvas.create_window((0, 0), window=content, anchor='nw')
+        content.bind('<Configure>', lambda event: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>', lambda event: canvas.itemconfigure(window, width=event.width))
+        ttk.Label(content, text='Find your repositories — no individual registration needed', font=('Segoe UI', 12, 'bold')).pack(anchor='w')
+        self.workspace_label = tk.StringVar()
+        ttk.Label(content, textvariable=self.workspace_label, wraplength=680).pack(anchor='w', pady=6)
+        workspace_buttons = ttk.Frame(self.projects_tab)
+        workspace_buttons.pack(fill='x', pady=(0, 8))
+        ttk.Button(workspace_buttons, text='Add workspace folder', command=self.add_workspace).pack(side='left')
+        ttk.Button(workspace_buttons, text='Refresh folders', command=self.scan_workspaces).pack(side='left', padx=6)
+        ttk.Button(workspace_buttons, text='Use common folders', command=self.reset_workspaces).pack(side='left')
+        self.discovered_list = tk.Listbox(content, height=3, bg='#142238', fg='#bce4d8', highlightthickness=0)
+        self.discovered_list.pack(fill='x', pady=(0, 8))
+        ttk.Label(content, text='Optional saved aliases and exclusions', foreground='#8ca3bf').pack(anchor='w')
+        self.project_list = tk.Listbox(content, height=7, exportselection=False)
         self.project_list.pack(fill='x')
         self.project_list.bind('<<ListboxSelect>>', self.select_project)
         self.project_fields = {}
         for key, title in [('name', 'Display name'), ('path', 'Absolute repository root'),
                            ('aliases', 'Spoken aliases (comma separated)'), ('exclusions', 'Exclude file patterns (comma separated)')]:
-            ttk.Label(self.projects_tab, text=title).pack(anchor='w', pady=(10, 2))
+            ttk.Label(content, text=title).pack(anchor='w', pady=(10, 2))
             variable = tk.StringVar()
             self.project_fields[key] = variable
-            ttk.Entry(self.projects_tab, textvariable=variable).pack(fill='x')
+            ttk.Entry(content, textvariable=variable).pack(fill='x')
         buttons = ttk.Frame(self.projects_tab)
         buttons.pack(fill='x', pady=12)
         ttk.Button(buttons, text='Choose folder', command=lambda: self.choose_folder(self.project_fields['path'])).pack(side='left')
@@ -162,6 +199,36 @@ class Application:
         ttk.Button(buttons, text='New', command=self.new_project).pack(side='left')
         ttk.Button(buttons, text='Remove selected', command=self.remove_project).pack(side='left', padx=6)
         self.refresh_projects()
+
+    def add_workspace(self) -> None:
+        if not self.editable() or self.scanning:
+            return
+        path = filedialog.askdirectory(parent=self.root, title='Choose a folder containing your Git projects')
+        if path:
+            roots = self.settings.search_roots or default_roots()
+            self.settings.search_roots = list(dict.fromkeys([*roots, str(Path(path).resolve())]))
+            self.settings.save()
+            self.scan_workspaces()
+
+    def reset_workspaces(self) -> None:
+        if self.editable() and not self.scanning:
+            self.settings.search_roots = []
+            self.settings.save()
+            self.scan_workspaces()
+
+    def scan_workspaces(self) -> None:
+        if self.scanning:
+            return
+        self.scanning = True
+        roots = self.settings.search_roots or default_roots()
+        self.workspace_label.set('Searching: ' + (', '.join(roots) or 'No common work folders exist. Add a workspace folder.'))
+        self.set_step(4, 'Searching folders…')
+        def run():
+            try:
+                self.emit('discovered', discover(roots, lambda text: self.emit('scan_progress', text)))
+            except Exception as exc:
+                self.emit('scan_error', str(exc))
+        threading.Thread(target=run, daemon=True).start()
 
     def choose_folder(self, variable: tk.StringVar) -> None:
         path = filedialog.askdirectory(parent=self.root)
@@ -294,21 +361,29 @@ class Application:
         self.setup_task = None
         self.setup_tab.columnconfigure(1, weight=1)
         self.setup_tab.rowconfigure(1, weight=1)
-        ttk.Label(self.setup_tab, text='Complete these steps once. Click a button and watch Setup results on the right.',
+        ttk.Label(self.setup_tab, text='Get ready in minutes. Offline speech stays on your PC. Your Git folders are found automatically.',
                   wraplength=650).grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 12))
         buttons = ttk.Frame(self.setup_tab)
         buttons.grid(row=1, column=0, sticky='nw', padx=(0, 16))
         self.check_button = ttk.Button(buttons, text='1. Run device checks', command=self.check_devices)
         self.check_button.pack(fill='x', pady=(0, 8))
-        self.download_button = ttk.Button(buttons, text='2. Download English model (~40 MB)', command=self.download)
+        self.download_button = ttk.Button(buttons, text='2. Prepare offline voice', command=self.download)
         self.download_button.pack(fill='x', pady=8)
         ttk.Button(buttons, text='3. Speak voice test', command=self.test_voice).pack(fill='x', pady=8)
-        ttk.Button(buttons, text='4. Register projects', command=self.open_projects).pack(fill='x', pady=8)
-        ttk.Button(buttons, text='5. Open voice settings', command=self.open_voice_settings).pack(fill='x', pady=8)
+        ttk.Button(buttons, text='4. Find my Git folders', command=self.find_folders).pack(fill='x', pady=8)
+        ttk.Button(buttons, text='5. Start wake listening', command=self.start_wake).pack(fill='x', pady=8)
         results = ttk.Frame(self.setup_tab)
         results.grid(row=1, column=1, sticky='nsew')
         ttk.Label(results, text='Setup results', font=('Segoe UI', 11, 'bold')).pack(anchor='w')
-        self.setup_progress = ttk.Progressbar(results, mode='indeterminate')
+        self.steps = ttk.Treeview(results, columns=('status',), show='tree headings', height=5)
+        self.steps.heading('#0', text='Step')
+        self.steps.heading('status', text='Progress')
+        self.steps.column('#0', width=115, minwidth=90, stretch=False)
+        self.steps.column('status', width=170, minwidth=80)
+        for number, title in enumerate(['Device check', 'Offline voice', 'Voice playback', 'Git folders', 'Wake listening'], 1):
+            self.steps.insert('', 'end', iid=str(number), text=title, values=('Not started',))
+        self.steps.pack(fill='x', pady=(6, 0))
+        self.setup_progress = ttk.Progressbar(results, mode='determinate', value=0)
         self.setup_progress.pack(fill='x', pady=8)
         output_frame = ttk.Frame(results)
         output_frame.pack(fill='both', expand=True)
@@ -321,10 +396,41 @@ class Application:
         self.check_text = tk.StringVar()
         self.check_text.trace_add('write', self.show_setup_results)
         self.check_text.set('Start with step 1. Device-check results and any errors will appear here. No files are changed by device checks.')
-        ttk.Label(self.setup_tab, text='Microphone permission: Windows Settings → Privacy → Microphone → allow desktop apps. '
-                  'Recognition stays offline. After step 5, save settings and say your wake phrase. '
-                  'Restricted-vocabulary recognition is not a dedicated wake-word engine; test it in your room.',
-                  wraplength=650).grid(row=2, column=0, columnspan=2, sticky='w', pady=(12, 0))
+        footer = ttk.Frame(self.setup_tab)
+        footer.grid(row=2, column=0, columnspan=2, sticky='ew', pady=(8, 0))
+        ttk.Button(footer, text='Windows microphone settings', command=self.microphone_settings).pack(side='left')
+        ttk.Label(footer, text='No admin access needed. Audio stays local.', foreground='#8ca3bf').pack(side='left', padx=12)
+
+    def set_step(self, number: int, status: str) -> None:
+        self.steps.item(str(number), values=(status,))
+
+    def microphone_settings(self) -> None:
+        try:
+            open_microphone_settings()
+            self.check_text.set('In Windows Settings, enable Microphone access and Allow desktop apps to access your microphone. '
+                                'Windows may not show a separate permission popup for this desktop app. Return here and run Device checks.')
+        except Exception as exc:
+            self.check_text.set(str(exc))
+
+    def find_folders(self) -> None:
+        self.tabs.select(self.projects_tab)
+        self.result.set('Discovering Git folders. Add a workspace if your projects are elsewhere; no per-project registration is required.')
+        self.scan_workspaces()
+
+    def start_wake(self) -> None:
+        if self.controller.busy:
+            return
+        model = existing_model(self.model.get().strip() or self.settings.model_path)
+        if model is None:
+            self.set_step(5, 'Needs offline voice')
+            self.check_text.set('Prepare offline voice in step 2 first. A local speech model is required to hear your wake phrase.')
+            return
+        self.model.set(str(model))
+        self.set_step(5, 'Opening microphone…')
+        self.settings.model_path = str(model)
+        self.save_settings()
+        self.check_text.set('Starting offline listening. Wait for Microphone active, then say your wake phrase: ' + self.settings.wake_phrase)
+
 
     def show_setup_results(self, *args) -> None:
         self.setup_output.configure(state='normal')
@@ -341,18 +447,21 @@ class Application:
         self.result.set(message)
         self.check_button.configure(state='disabled')
         self.download_button.configure(state='disabled')
+        self.setup_progress.configure(mode='indeterminate')
         self.setup_progress.start(15)
         return True
 
     def finish_setup_task(self) -> None:
         self.setup_task = None
         self.setup_progress.stop()
+        self.setup_progress.configure(mode='determinate', value=0)
         self.check_button.configure(state='normal')
         self.download_button.configure(state='normal')
 
     def check_devices(self) -> None:
         if not self.start_setup_task('Device check', 'Checking Python, Git, model and microphone…'):
             return
+        self.set_step(1, 'Checking…')
         def run():
             try:
                 self.emit('diagnostics', '\n'.join(diagnostics(self.settings)))
@@ -361,6 +470,7 @@ class Application:
         threading.Thread(target=run, daemon=True).start()
 
     def test_voice(self) -> None:
+        self.set_step(3, 'Playing…')
         self.check_text.set('Voice test requested. You should hear a spoken sentence. If you hear it, continue to step 4. '
                             'If not, check speaker volume and Voice & startup. Any speech error will appear here.')
         self.result.set('Playing the offline voice test. Check your speakers or headphones.')
@@ -375,11 +485,17 @@ class Application:
         self.tabs.select(self.settings_tab)
 
     def download(self) -> None:
+        model = existing_model(self.model.get().strip() or self.settings.model_path)
+        if model is not None:
+            self.emit('model', str(model))
+            return
         if not self.start_setup_task('Model download', 'Downloading the English model (~40 MB). Keep the app open; this can take a few minutes…'):
             return
+        self.set_step(2, 'Downloading…')
         def run():
             try:
-                path = download_model(lambda value: self.emit('download_progress', value))
+                path = download_model(lambda value: self.emit('download_progress', value),
+                                      lambda count, total: self.emit('download_bytes', (count, total)))
                 self.emit('model', str(path))
             except Exception as exc:
                 self.emit('download_error', str(exc))
@@ -402,6 +518,7 @@ class Application:
             if kind in ('prepared', 'prepare_failed', 'done', 'failed'):
                 self.controller.receive(kind, value)
             elif kind == 'wake':
+                self.set_step(5, 'Wake phrase detected')
                 self.root.deiconify()
                 self.root.lift()
                 self.root.attributes('-topmost', True)
@@ -415,7 +532,14 @@ class Application:
                 self.controller.cancel()
             elif kind in ('microphone', 'microphone_error'):
                 self.mic.set(str(value))
+                if kind == 'microphone' and str(value).startswith('Microphone active'):
+                    self.set_step(5, 'Listening — say wake phrase')
+                    self.check_text.set('Microphone active. Say ' + self.settings.wake_phrase + ', then name your folder and describe the changes.')
+                if kind == 'microphone' and str(value) == 'Microphone stopped':
+                    if 'error' not in str(self.steps.item('5', 'values')).lower():
+                        self.set_step(5, 'Stopped')
                 if kind == 'microphone_error':
+                    self.set_step(5, 'Microphone/model error')
                     self.append(str(value))
                     self.result.set('Voice unavailable. Complete Setup or use the manual controls.')
                     self.check_text.set(str(value))
@@ -425,6 +549,8 @@ class Application:
                     self.result.set(str(value))
                 if kind == 'error':
                     self.check_text.set(str(value))
+                    if 'Speech' in str(value) or 'SAPI' in str(value):
+                        self.set_step(3, 'Voice needs attention')
             elif kind == 'state':
                 self.state.set(str(value))
                 if self.controller.busy:
@@ -470,20 +596,58 @@ class Application:
                         self.voice_names[label] = self.settings.voice_id
                         self.voice_picker.configure(values=list(self.voice_names))
                         self.voice_choice.set(label)
+            elif kind == 'spoken':
+                if str(value) == 'GitPush Agent is using your local Windows voice.':
+                    self.set_step(3, 'Played — did you hear it?')
+                    self.check_text.set('Windows finished playing the voice test. If you heard it, continue. If not, check speaker volume and the selected output device.')
+            elif kind == 'scan_progress':
+                self.workspace_label.set(str(value))
+                self.set_step(4, str(value))
+            elif kind == 'discovered':
+                self.scanning = False
+                self.controller.discovered_projects = value.projects
+                self.discovered_list.delete(0, 'end')
+                for project in value.projects:
+                    self.discovered_list.insert('end', f'{project.name} — {project.path}')
+                summary = f'{len(value.projects)} Git folders found; {value.visited} folders checked.'
+                self.workspace_label.set(summary + (' Some folders could not be searched; see Activity.' if value.warnings else ''))
+                self.set_step(4, f'{len(value.projects)} found' + ('; review scan warnings' if value.warnings else ''))
+                self.append(summary + '\n' + '\n'.join(value.warnings))
+            elif kind == 'scan_error':
+                self.scanning = False
+                self.set_step(4, 'Search failed')
+                self.workspace_label.set(str(value))
+                self.append(str(value))
+            elif kind == 'download_bytes':
+                count, total = value
+                detail = f'{count / 1048576:.1f} MB received'
+                if total:
+                    percent = min(100, count * 100 / total)
+                    self.setup_progress.stop()
+                    self.setup_progress.configure(mode='determinate', value=percent)
+                    detail = f'{percent:.0f}% — {count / 1048576:.1f} / {total / 1048576:.1f} MB'
+                self.set_step(2, detail)
+                self.check_text.set('Downloading offline voice: ' + detail + '. After download, the archive will be checked and extracted.')
             elif kind == 'diagnostics':
                 self.finish_setup_task()
+                needs_attention = any(word in str(value).lower() for word in ('not found', 'failed', 'blocked', 'requires windows'))
+                self.set_step(1, 'Review results' if needs_attention else 'Checks complete')
                 self.check_text.set(str(value))
                 self.result.set('Device checks finished. Review Setup results for any missing requirements.')
             elif kind == 'download_progress':
                 self.check_text.set(str(value))
             elif kind == 'model':
                 self.model.set(str(value))
+                self.settings.model_path = str(value)
+                self.settings.save()
+                self.set_step(2, 'Ready — saved locally')
                 self.finish_setup_task()
-                message = f'Model ready: {value}\nNext: test the voice, register a project, then open Voice & startup and click Save settings & restart listener.'
+                message = f'Offline voice ready: {value}\nNext: test the voice, find your Git folders, then click Start wake listening. No individual project registration is required.'
                 self.check_text.set(message)
-                self.result.set('Model ready. Continue with steps 3–5.')
+                self.result.set('Offline voice is saved and ready. Continue with steps 3–5.')
             elif kind == 'download_error':
                 self.finish_setup_task()
+                self.set_step(2, 'Download failed — retry')
                 self.check_text.set('Model download failed: ' + str(value) + '\nCheck internet access, or select an extracted official model in Voice & startup.')
                 self.result.set('Model download failed. See Setup results for the error.')
             elif kind == 'close':
@@ -502,4 +666,5 @@ class Application:
         self.listener.stop()
         self.speech.close()
         self.root.after_cancel(self._drain_after)
+        self.root.after_cancel(self._scan_after)
         self.root.destroy()
